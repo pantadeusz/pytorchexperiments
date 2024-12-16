@@ -5,6 +5,7 @@
 
 import sys
 import torch
+import time
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets
@@ -25,22 +26,21 @@ class NeuralNetwork(nn.Module):
             nn.Flatten(),
             nn.Linear(13*13*32, 256),
             nn.ReLU(),
+            nn.Dropout(0.5),
             nn.Linear(256, 32),
             nn.ReLU(),
             nn.Linear(32, 2),
-            nn.Sigmoid()
+            nn.Tanh()
         )
         self.decoder = nn.Sequential(
             nn.Linear(2, 128),
             nn.ReLU(),
-            #nn.Dropout(0.2),
             nn.Linear(128, 128),
             nn.ReLU(),
-            #nn.Dropout(0.2),
             nn.Linear(128, 26*26*32),
             nn.ReLU(),
             nn.Unflatten(1,(32,26,26)),
-            nn.ConvTranspose2d(32,1,(3,3)) # conv_transpose2d(inputs, weights, padding=1)
+            nn.ConvTranspose2d(32,1,(3,3))
         )
 
     def forward(self, x):
@@ -50,7 +50,6 @@ class NeuralNetwork(nn.Module):
 
 
 def train(epoch, dataloader, model, loss_fn, optimizer, device):
-    size = len(dataloader.dataset)
     model.train()
     for batch, (X, y) in enumerate(dataloader):
         X, y = X.to(device), y.to(device)
@@ -63,7 +62,7 @@ def train(epoch, dataloader, model, loss_fn, optimizer, device):
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
-        loss, current = loss.item(), (batch + 1) * len(X)
+        loss = loss.item()
         print(f"[{epoch}] | Batch: {batch} | Loss: {loss:>7f}      ",end="\r")
     print("")
 
@@ -116,12 +115,17 @@ def main() -> int:
         print("could not load pretrained model")
 
     loss_fn = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
-    epochs = 20
+    epochs = 30
+    lr = 0.001
+    start = time.time()
     for t in range(epochs):
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         train(t, train_dataloader, model, loss_fn, optimizer, device)
-        torch.save(model.state_dict(), "modelautoenc.pth")    
+        lr = lr * 0.9
+        torch.save(model.state_dict(), "modelautoenc.pth")
+    end = time.time()
+    print("Training time[s]: ",end - start)
 
     save_images(model, device, raw_training_data)
 

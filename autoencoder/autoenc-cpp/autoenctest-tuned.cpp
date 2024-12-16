@@ -1,8 +1,17 @@
 /*
 The skeleton was based on the PyTorch documentation, but right now it is almost completely new code
 
+This is the tuned version - it works significantly faster than the version that follows the practices from documentation.
+
 Tadeusz Puźniakowski, 2024
 */
+
+#include <chrono>
+#include <numeric>
+#include <iomanip>
+#include <tuple>
+
+
 #include <torch/torch.h>
 
 #include "thirdparty/lodepng.h"
@@ -16,10 +25,11 @@ struct Net : torch::nn::Module {
             torch::nn::Flatten(),
             torch::nn::Linear(13 * 13 * 32, 256),
             torch::nn::ReLU(),
+            torch::nn::Dropout(0.5),
             torch::nn::Linear(256, 32),
             torch::nn::ReLU(),
             torch::nn::Linear(32, 2),
-            torch::nn::Sigmoid()
+            torch::nn::Tanh()
             ));
         decoder = register_module("decoder", torch::nn::Sequential(
             torch::nn::Linear(2, 128),
@@ -90,14 +100,13 @@ std::vector<T> to_vector(torch::Tensor result) {
     return std::vector<T>(ptr, ptr+size);
 }
 
-auto train = [](auto epoch, auto &data_loader, auto &model/*, auto &loss_fn */, auto &optimizer, auto &device) {
+auto train = [](auto epoch, auto &data_loader, auto &model, auto &loss_fn, auto &optimizer, auto &device) {
     size_t batch_index = 0;
     model->train();
     for (auto &batch: *data_loader) {
-        auto x_batch = batch.data.data().to(device);
-        auto y_batch = batch.data.data().to(device); //batch.target.data().to(device);
+        auto &[x_batch, y_batch] = batch;
         torch::Tensor prediction = model->forward(x_batch);
-        torch::Tensor loss = torch::mse_loss(prediction, y_batch);
+        torch::Tensor loss = loss_fn(prediction, y_batch);
         loss.backward();
         optimizer.step();
         optimizer.zero_grad();
@@ -105,7 +114,7 @@ auto train = [](auto epoch, auto &data_loader, auto &model/*, auto &loss_fn */, 
                     << " | Loss: " << loss.item<float>() << "        \r";
         std::cout.flush();
     }
-    std::cout << std::endl;    
+    std::cout << std::endl;
 };
 
 auto save_images = [](auto &net, auto &data_loader,auto &device){
@@ -146,7 +155,12 @@ auto save_images = [](auto &net, auto &data_loader,auto &device){
 };
 
 
+
 int main() {
+    std::map<std::string,std::function<torch::Tensor(const torch::Tensor&,const torch::Tensor&)>> loss_functions = {
+        {"mse",[](const torch::Tensor &a,const torch::Tensor &b){return torch::mse_loss(a,b); }}
+
+    };
     std::cout << "PyTorch: " << TORCH_VERSION_MAJOR << "." << TORCH_VERSION_MINOR << "."<< TORCH_VERSION_PATCH << std::endl;
     torch::Device device(torch::kCPU);
     if (torch::cuda::is_available()) {
@@ -163,18 +177,32 @@ int main() {
             mnist_training.map(
                     torch::data::transforms::Stack<>()),
             batch_size);
-
-    torch::optim::Adam optimizer(net->parameters(), /*lr=*/0.0001);
+    auto batches = std::make_shared<std::vector<std::pair<torch::Tensor,torch::Tensor>>>() ;
+    for (auto &batch: *data_loader) {
+        torch::Tensor x_batch = batch.data.data().to(device);
+        torch::Tensor y_batch = batch.data.data().to(device); //batch.target.data().to(device);
+        batches->push_back(std::make_pair(x_batch, y_batch));
+    }
     try {
         torch::load(net, "autoencoder.pt");
     } catch (...) {
         std::cout << "some error lading model" << std::endl;
     }
     net->to(device);
-    for (size_t epoch = 1; epoch <= 20; ++epoch) {
-        train(epoch, data_loader, net/*, loss_fn */, optimizer, device);
+    double lr = 0.001;
+    size_t epochs = 30;
+    const auto start_time = std::chrono::high_resolution_clock::now();
+    for (size_t epoch = 1; epoch <= epochs; ++epoch) {
+        torch::optim::Adam optimizer(net->parameters(), lr);
+        train(epoch, batches, net, loss_functions["mse"] , optimizer, device);
+        lr = lr * 0.9;
         torch::save(net, "autoencoder.pt");
     }
+    const auto end_time = std::chrono::high_resolution_clock::now();
+    const std::chrono::duration<double> diff = end_time - start_time;
+    std::cout << std::fixed << std::setprecision(9) << std::left;
+    std::cout << "Training time[s]: " << diff.count() << '\n';
+
     save_images(net, data_loader ,device);
     return 0;
 }
